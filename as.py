@@ -29,13 +29,14 @@
 # Bit 28 + 29: MOVLIO: use a SOURCE + IMMEDIATE offset into memory
 # Bit 27: MOVR, move a register to another
 # Bit 26: POP, pop a value from the stack into DEST
+# Bit 25: MOVLL, load a literal into DEST
 #
 # Register-to-Memory ops (Bit 31 and bit 30 disabled):
 # Bit 29: MOVSO, store SOURCE at a DEST offset into memory
 # Bit 28: MOVSI, store SOURCE at IMMEDIATE offset into memory
 # Bit 28 + 29: MOVSIO, store SOURCE at a IMMEDIATE + DEST offset into memory
 # Bit 27: Reserved
-# Bit 26: PUSH, put a value at the "top" of the stack
+# Bit 26: PUSH, put a valuein SOURCE at the "top" of the stack
 #
 # This block does nothing for Register-to-Memory ops:
 # Bit 14: Skip the next instruction if item in DEST is non-zero, negative
@@ -73,12 +74,10 @@ class File:
     def get_line_of_index(self, index: int) -> int:
         ret = 0
         for idx, char in enumerate(self.fdata, start = 0):
-            if idx > index:
-                break;
             if char == '\n':
                 ret += 1
-        else:
-            raise IndexError("Invalid argument to `File.get_line_of_index(index)`: `index` was beyond length of `self.fdata`!")
+            if idx >= index:
+                break;
 
         return ret
 
@@ -98,7 +97,11 @@ class File:
 
             end_splice += 1
 
-        return self.fdata[start_splice : end_splice]
+        ret = self.fdata[start_splice : end_splice]
+        if not ret.strip():
+            ret = self.get_line_as_string(index - 1)
+
+        return ret
 
     def get_fname(self) -> str:
         return self.fname
@@ -107,6 +110,7 @@ class File:
 
     def inject(self, data: str, index: int):
         self.fdata = self.fdata[0:index] + data + self.fdata[index:len(self.fdata)]
+        self.fdata_len = len(self.fdata)
 
 class Symbol:
     mark_symbols = ("\'", "\"", ":", ";", "{", "}", "(", ")", "[", "]", ",", "#")
@@ -122,6 +126,8 @@ class Symbol:
 
         self.src_data = data
 
+        self.address = 0
+
         if self.str_repr in Symbol.mark_symbols:
             self.stype |= SymType.MARKS
         elif self.str_repr.startswith("%"):
@@ -136,21 +142,33 @@ class Symbol:
     def __str__(self):
         return f"<'{self.str_repr}', type {self.stype}>"
 
+    def set_address(self, addr: int):
+        self.address = addr
+
+    def get_address(self):
+        return self.address
+
 def raise_assembly_error(msg: str, index: int, data: File):
     line = data.get_line_of_index(index)
     line_str = data.get_line_as_string(index)
 
-    final_message = "as.py: {0}, line {1}: {2} \n> {3}"
+    final_message = "as.py: {0}, line {ln}: {1} \n{ln}> {2}"
 
-    print(final_message.format(data.get_fname(), line, msg, line_str), file=sys.stderr)
+    print(final_message.format(data.get_fname(), msg, line_str, ln=line), file=sys.stderr)
+
+    if verbose:
+        print(data.get_data())
 
 class Macro:
     def __init__(self, name: str, content: str):
         self.name = name
-        self.content = content
+        self.content = content + " "
 
     def get_content(self):
         return self.content
+
+    def get_name(self):
+        return self.name
 
 class Lexer:
     whitespace_tokens = (' ', '\n', '\t', '\r')
@@ -263,16 +281,24 @@ class Lexer:
         if ret != None:
             if ret.stype & SymType.DRCTV:
                 if ret.str_repr == f"%macro":
-                    name = self.__consume_next_wrapper().str_repr
+                    ns = self.__consume_next_wrapper()
+                    name = ns.str_repr
                     compound = ""
+                    last_sym = ns
                     while True:
                         sym = self.__consume_next_wrapper()
+                        if sym == None:
+                            raise_assembly_error(f"Unexpected EOF in macro definition for {name}", last_sym.index - 1, last_sym.src_data)
+                            exit()
                         if sym.str_repr == f"%endmacro": break
-                        compound = compound + " " + sym.str_repr
+                        last_sym = sym
+                        compound = compound + sym.str_repr + " "
 
-                    m = Macro(name, compound + " ")
+                    m = Macro(name, compound)
                     self.registered_macros[name] = m
                 elif ret.str_repr == f"%sect":
+                    return ret
+                elif ret.str_repr == f"%entry_point":
                     return ret
                 else:
                     raise_assembly_error("Unexpected directive", ret.index, ret.src_data)
@@ -281,25 +307,49 @@ class Lexer:
 
         return ret
 
+    def register_macro(self, mcr: Macro):
+        name = mcr.get_name()
+        self.registered_macros[name] = mcr
+
+class OpcodeParts(Flag):
+    SOURCE = auto()
+    DEST = auto()
+    IMMEDIATE = auto()
+
 class Opcode:
-    def __init__(self, str_repr: str, opc: int, src: bool = True, dest: bool = True, immediate: bool = False):
+    def __init__(self, str_repr: str, opc: int, accepts: OpcodeParts = OpcodeParts.SOURCE | OpcodeParts.DEST):
         self.str_repr = str_repr
         self.opc = opc
-        self.t_src = src
-        self.t_dest = dest
-        self.t_immediate = immediate
+        self.takes = accepts
+
+    def takes(self, parts: OpcodeParts):
+        if parts & self.takes:
+            return True
+        else:
+            return False
 
 class SoeMachine:
     opcodes = {"add" : Opcode("add", 0xC0000000),
-               "movr" : Opcode("movr", 0x48000000)}
+               "sub" : Opcode("sub", 0xA0000000),
+               "movr" : Opcode("movr", 0x48000000),
+               "movll" : Opcode("movll", 0x42000000, OpcodeParts.DEST),
+               "push" : Opcode("push", 0x4000000, OpcodeParts.SOURCE),
+               "pop" : Opcode("pop", 0x44000000, OpcodeParts.DEST)}
 
     def get_opcode(sym: Symbol, source: Symbol | None = None, dest: Symbol | None = None, immediate: symbol | None = None) -> int | None:
         return SoeMachine.opcodes[sym.str_repr]
+
+    def register_machine_macros(lex: Lexer):
+        lex.register_macro(Macro("&rip", "&r63"))
+        lex.register_macro(Macro("&rsp", "&r62"))
+        lex.register_macro(Macro("&rac", "&r2"))
 
 class Parser:
     def __init__(self, lexer: Lexer):
         self.symbol_table = {}
         self.lex = lexer
+
+verbose = False
 
 if __name__ == "__main__":
     argument_parser = argparse.ArgumentParser(description="Assembler for the Scratch Optimized Emulator")
@@ -314,6 +364,7 @@ if __name__ == "__main__":
         print("Opening files for compilation...")
 
     lex = Lexer()
+    SoeMachine.register_machine_macros(lex)
 
     for f in parsed.files:
         try:
