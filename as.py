@@ -144,6 +144,14 @@ def raise_assembly_error(msg: str, index: int, data: File):
 
     print(final_message.format(data.get_fname(), line, msg, line_str), file=sys.stderr)
 
+class Macro:
+    def __init__(self, name: str, content: str):
+        self.name = name
+        self.content = content
+
+    def get_content(self):
+        return self.content
+
 class Lexer:
     whitespace_tokens = (' ', '\n', '\t', '\r')
 
@@ -157,7 +165,7 @@ class Lexer:
         self.fline = 0
         self.fname = 0
 
-        self.registered_macros = {"blank" : ""}
+        self.registered_macros = {"blank" : Macro("blank", "")}
 
     def add_data(self, name: str, data: str):
         if not isinstance(data, str):
@@ -194,7 +202,7 @@ class Lexer:
                     sym = Symbol(entree, self.index - 1, self.findex, cur_d)
                     is_macro = entree in self.registered_macros
                     if is_macro:
-                        cur_d.inject(self.registered_macros[entree], self.index)
+                        cur_d.inject(self.registered_macros[entree].get_content(), self.index)
                         entree = ""
                     else:
                         return sym
@@ -206,7 +214,7 @@ class Lexer:
                     sym = Symbol(entree, self.index, self.findex - 1, cur_d)
                     is_macro = entree in self.registered_macros
                     if is_macro:
-                        cur_d.inject(self.registered_macros[entree], self.index)
+                        cur_d.inject(self.registered_macros[entree].get_content(), self.index)
                         entree = ""
                     else:
                         return sym
@@ -223,7 +231,7 @@ class Lexer:
                     sym = Symbol(cc, self.index, self.findex, cur_d)
                     is_macro = entree in self.registered_macros
                     if is_macro:
-                        cur_d.inject(self.registered_macros[entree], self.index)
+                        cur_d.inject(self.registered_macros[entree].get_content(), self.index)
                         entree = ""
                     else:
                         return sym
@@ -231,7 +239,7 @@ class Lexer:
                     sym = Symbol(entree, self.index, self.findex, cur_d)
                     is_macro = entree in self.registered_macros
                     if is_macro:
-                        cur_d.inject(self.registered_macros[entree], self.index)
+                        cur_d.inject(self.registered_macros[entree].get_content(), self.index)
                         entree = ""
                     else:
                         return sym
@@ -241,7 +249,7 @@ class Lexer:
                     sym = Symbol(entree, self.index, self.findex, cur_d)
                     is_macro = entree in self.registered_macros
                     if is_macro:
-                        cur_d.inject(self.registered_macros[entree], self.index)
+                        cur_d.inject(self.registered_macros[entree].get_content(), self.index)
                         entree = ""
                     else:
                         return sym
@@ -262,7 +270,8 @@ class Lexer:
                         if sym.str_repr == f"%endmacro": break
                         compound = compound + " " + sym.str_repr
 
-                    self.registered_macros[name] = compound + " "
+                    m = Macro(name, compound + " ")
+                    self.registered_macros[name] = m
                 elif ret.str_repr == f"%sect":
                     return ret
                 else:
@@ -297,7 +306,7 @@ if __name__ == "__main__":
     argument_parser.add_argument("files", nargs='+', help="the files to assemble and link")
     argument_parser.add_argument("-o", "--out", nargs=1, help="the output filename", default="rom.out", metavar="<file name>")
     argument_parser.add_argument("--dump", help="dump the resulting executable to stdout", action="store_true")
-    argument_parser.add_argument("-v", "--verbose", help="enable verbose output", action="store_true")
+    argument_parser.add_argument("-w", "--verbose", help="enable verbose output", action="store_true")
 
     parsed = argument_parser.parse_args()
     verbose = parsed.verbose
