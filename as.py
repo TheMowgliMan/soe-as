@@ -58,6 +58,9 @@ class SymType(Flag):
     SYMBL = auto() # Misc symbol
     RGSTR = auto() # Register
 
+    SDATA = auto() # Data section
+    STEXT = auto() # Text section
+
 class File:
     def __init__(self, fname, fdata):
         self.fname = fname
@@ -345,19 +348,24 @@ class SoeMachine:
         lex.register_macro(Macro("&rac", "&r2"))
 
 class DataSymbol(Symbol):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, symbol_type: SymType):
+        super().__init__("", 0, 0, File("", ""))
         self.data = []
+        self.stype = symbol_type
+        self.is_entry_point = False
 
     def add_data(self, idata: list[int]):
         self.data.append(idata)
+
+    def set_as_entry_point(self):
+        self.is_entry_point = True
 
     def __getitem__(self, index: int):
         return self.data[index]
 
 class ExecutableObject:
-    def __init__(self, data: list[DataSymbol]):
-        self.data_array = data
+    def __init__(self):
+        self.data_array = []
 
     def add_data(self, data: list[DataSymbol]):
         for datum in data:
@@ -370,6 +378,74 @@ class Parser:
     def __init__(self, lexer: Lexer):
         self.symbol_table = {}
         self.lex = lexer
+        self.last_sym = None
+        self.cur_sym = None
+
+    def consume_next_token(self):
+        self.last_sym = self.cur_sym
+        self.cur_sym = self.lex.consume_next_token()
+        return self.cur_sym
+
+    def safe_consume_next_token(self, when: str):
+        ret = self.consume_next_token()
+
+        if ret == None:
+            raise_assembly_error(f"Unexpected EOF in {when}", self.last_sym.index, self.last_sym.src_data)
+
+        return ret
+
+    def parse(self) -> ExecutableObject:
+        section = None
+        ret_exe = ExecutableObject()
+
+        entry_point_found = False
+        cur_label = None
+
+        while True:
+            tok = self.consume_next_token()
+
+            if tok == None:
+                if not entry_point_found:
+                    raise_assembly_error(f"Unexpected EOF with no entry point found", self.last_sym.index, self.last_sym.src_data)
+                break;
+
+            if tok.stype & SymType.DRCTV:
+                if tok.str_repr == f"%sect":
+                    sect = safe_consume_next_token(f"%sect directive")
+                    if sect.str_repr == "text":
+                        section = SymType.STEXT
+                    elif sect.str_repr == "data":
+                        section = SymType.SDATA
+                    else:
+                        raise_assembly_error(f"Invalid section '{sect.str_repr}'; expected 'text' or 'data'", sect.index, sect.src_data)
+                elif tok.str_repr == f"%entry_point":
+                    if entry_point_found:
+                        raise_assembly_error(f"Cannot make label entry point when one is already present", tok.index, tok.src_data)
+
+                    label = self.safe_consume_next_token(f"%entry_point directive")
+                    colon = self.safe_consume_next_token(f"%entry_point directive")
+
+                    if label.stype != SymType.SYMBL or colon.stype != SymType.MARKS or colon.str_repr != ":":
+                        raise_assembly_error(f"'%entry_point' directive requires a label immediately following", label.index, label.src_data)
+
+                    if not section:
+                        raise_assembly_error(f"Cannot start label '{label.str_repr}' as there is no defined section", label.index, label.src_data)
+
+                    if cur_labl != None:
+                        ret_exe.add_data([cur_label])
+
+                    cur_label = DataSymbol(section)
+            elif tok.stype & SymType.SYMBL:
+                nextt = self.safe_consume_next_token("symbol resolution")
+
+                if nextt.stype & SymType.MARKS and nextt.str_repr == ":":
+                    if not section:
+                        raise_assembly_error(f"Cannot start label '{tok.str_repr}' as there is no defined section", tok.index, tok.src_data)
+
+                    if cur_label != None:
+                        ret_exe.add_data([cur_label])
+
+                    cur_label = DataSymbol(section)
 
 verbose = False
 
