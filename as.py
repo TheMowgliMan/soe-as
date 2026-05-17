@@ -344,6 +344,28 @@ class SoeMachine:
         lex.register_macro(Macro("&rsp", "&r62"))
         lex.register_macro(Macro("&rac", "&r2"))
 
+class DataSymbol(Symbol):
+    def __init__(self):
+        super().__init__()
+        self.data = []
+
+    def add_data(self, idata: list[int]):
+        self.data.append(idata)
+
+    def __getitem__(self, index: int):
+        return self.data[index]
+
+class ExecutableObject:
+    def __init__(self, data: list[DataSymbol]):
+        self.data_array = data
+
+    def add_data(self, data: list[DataSymbol]):
+        for datum in data:
+            self.data_array.append(datum)
+
+    def __getitem__(self, index):
+        return self.data_array[index]
+
 class Parser:
     def __init__(self, lexer: Lexer):
         self.symbol_table = {}
