@@ -348,8 +348,8 @@ class SoeMachine:
         lex.register_macro(Macro("&rac", "&r2"))
 
 class DataSymbol(Symbol):
-    def __init__(self, symbol_type: SymType):
-        super().__init__("", 0, 0, File("", ""))
+    def __init__(self, symbol_type: SymType, label_name: str):
+        super().__init__(label_name, 0, 0, File("", ""))
         self.data = []
         self.stype = symbol_type
         self.is_entry_point = False
@@ -434,7 +434,7 @@ class Parser:
                     if cur_labl != None:
                         ret_exe.add_data([cur_label])
 
-                    cur_label = DataSymbol(section)
+                    cur_label = DataSymbol(section, tok.str_repr)
             elif tok.stype & SymType.SYMBL:
                 nextt = self.safe_consume_next_token("symbol resolution")
 
@@ -445,7 +445,25 @@ class Parser:
                     if cur_label != None:
                         ret_exe.add_data([cur_label])
 
-                    cur_label = DataSymbol(section)
+                    cur_label = DataSymbol(section, tok.str_repr)
+                else:
+                    if not section:
+                        raise_assembly_error(f"Cannot add opcode '{tok.str_repr}' as there is no defined section", tok.index, tok.src_data)
+                    elif not (section == SymType.STEXT):
+                        raise_assembly_error(f"Cannot add opcode '{tok.str_repr}' to section '{cur_label.str_repr}' as it is not a data section", tok.index, tok.src_data)
+                    elif not tok.str_repr in SoeMachine.opcodes:
+                        raise_assembly_error(f"Invalid opcode {tok.str_repr}", tok.index, tok.src_data)
+            elif tok.stype & SymType.LITRL:
+                if not (section == SymType.SDATA):
+                    if not cur_label:
+                        raise_assembly_error(f"Cannot add literal '{tok.str_repr}' as it is orphaned", tok.index, tok.src_data)
+
+                    if not section:
+                        raise_assembly_error(f"Cannot add literal '{tok.str_repr}' as there is no defined section", tok.index, tok.src_data)
+                    else:
+                        raise_assembly_error(f"Cannot add literal '{tok.str_repr}' to section '{cur_label.str_repr}' as it is not a data section", tok.index, tok.src_data)
+                else:
+                    cur_label.add_data([int(tok.str_repr[1:])]) # The power of slice magic :^)
 
 verbose = False
 
@@ -453,7 +471,7 @@ if __name__ == "__main__":
     argument_parser = argparse.ArgumentParser(description="Assembler for the Scratch Optimized Emulator")
     argument_parser.add_argument("files", nargs='+', help="the files to assemble and link")
     argument_parser.add_argument("-o", "--out", nargs=1, help="the output filename", default="rom.out", metavar="<file name>")
-    argument_parser.add_argument("--dump", help="dump the resulting executable to stdout", action="store_true")
+    argument_parser.add_argument("--dump", help="dump the resulting executable object to stdout", action="store_true")
     argument_parser.add_argument("-w", "--verbose", help="enable verbose output", action="store_true")
 
     parsed = argument_parser.parse_args()
